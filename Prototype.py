@@ -18,22 +18,48 @@ from typing import List, Dict, Set, Tuple, Any, Optional, Union
 class PrototypeAI(sc2.BotAI):
     def __init__(self):
         self.combinedActions = []
-        self.stage = None
-        print(self.stage)
         self.terran_dataframe = pd.DataFrame()
         self.set_early_game()
-        print(self.terran_dataframe)
+        self.scv_list = []
+        #dict = {key:value} {unit type: pre-req}
+        self.techtree = {
+            SCV:[COMMANDCENTER,ORBITALCOMMAND],
+            SUPPLYDEPOT:SCV,
+            BARRACKS:SUPPLYDEPOT,
+            BARRACKSTECHLAB:BARRACKS,
+            BARRACKSREACTOR:BARRACKS,
+            MARINE:BARRACKS,
+            REAPER:BARRACKS,
+            MARAUDER:BARRACKSTECHLAB,
+            GHOST:BARRACKSTECHLAB,
+            ORBITALCOMMAND:[COMMANDCENTER,BARRACKS],
+            FACTORY:BARRACKS,
+            FACTORYTECHLAB:FACTORY,
+            FACTORYREACTOR:FACTORY,
+            HELLION:FACTORY,
+            HELLIONTANK:FACTORY,
+            WIDOWMINE:FACTORY,
+            THOR:FACTORYTECHLAB,
+            SIEGETANK:FACTORYTECHLAB,
+            STARPORT:FACTORY,
+            STARPORTTECHLAB:STARPORT,
+            STARPORTREACTOR:STARPORT,
+            MEDIVAC:STARPORT,
+            VIKINGFIGHTER:STARPORT,
+            RAVEN:STARPORTTECHLAB,
+            BANSHEE:STARPORTTECHLAB,
+            BATTLECRUISER:STARPORTTECHLAB,
+            ENGINEERINGBAY:SUPPLYDEPOT,
+            ARMORY:FACTORY,
+                        }
 
     async def on_step(self, iteration):
         await self.do_actions(self.combinedActions)
         self.combinedActions = []
         await self.distribute_workers()
-        await self.train_scv()
+        await self.train_scv(self.techtree)
 
     def set_early_game(self):
-        if self.stage == None:
-            self.stage = "early"
-
         terran_unit_list = ['scv']
         rax_units = ['marine', 'maurader', 'reaper']
         fac_units = ['hellion', 'hellbat', 'cyclone', 'tank', 'thor']
@@ -46,16 +72,14 @@ class PrototypeAI(sc2.BotAI):
             for arg in args:
                 merged_list.extend(arg)
             return merged_list
-
+        
         terran_list = compile_list(terran_unit_list, rax_units, fac_units, starport_units, terran_building_list)
-
         def build_dict(unit_list):
             blanks = []
             for n in range(len(unit_list)):
                 blanks.append(0)
             unitdict = dict((zip(unit_list, blanks)))
             return unitdict
-
         terran_dict = build_dict(terran_list)
 
         def build_dataframe(dictval):
@@ -65,24 +89,20 @@ class PrototypeAI(sc2.BotAI):
             df['killed'] = dictval.values()
             df['current_max'] = dictval.values()
             return df
-
         self.terran_dataframe = build_dataframe(terran_dict)
 
-    async def train_scv(self):
-        # if self.stage == "early"
-        n = 0
-        for cc in self.units(COMMANDCENTER).ready.noqueue:
-            if self.units(SCV).amount < 17:
-                if self.can_afford(SCV) and not self.already_pending(SCV):
-                    self.combinedActions.append(cc.train(SCV))
-                    n += 1
-                    self.terran_dataframe.set_value(0, 'current', n)
-                    print(self.terran_dataframe)
-                    # add tag to unit, put tagged units into a list, update dataframe based on # in list.
+    async def train_scv(self, techdict):
+        for unit_type in techdict.keys():
+            if unit_type == SCV:
+                unit = unit_type
+                requirement = techdict[unit]
+                if self.can_afford(unit) and not self.already_pending(unit):
+                    for x in requirement:
+                        if self.units(x).exists:
+                            req_building = x
+                    for cc in self.units(req_building).ready.noqueue:
+                        self.combinedActions.append(cc.train(unit_type))
 
-                    # self.scv_count += 1
-                    # print("Current Game Time", str(datetime.timedelta(seconds=round(self.time))))
-                    # print("Total SCVs built:    " + str(self.scv_count))
 
     async def distribute_workers(self, performanceHeavy=True, onlySaturateGas=False):
         # expansion_locations = self.expansion_locations
