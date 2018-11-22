@@ -57,7 +57,9 @@ class PrototypeAI(sc2.BotAI):
         await self.do_actions(self.combinedActions)
         self.combinedActions = []
         await self.distribute_workers()
-        await self.train_scv(self.techtree)
+        await self.manage_supply(SUPPLYDEPOT)   #supply depot builds
+        await self.train_unit(SCV)
+        await self.train_unit(REAPER) #Nothing is happening, what is the trigger?
 
     def set_early_game(self):
         terran_unit_list = ['scv']
@@ -91,17 +93,66 @@ class PrototypeAI(sc2.BotAI):
             return df
         self.terran_dataframe = build_dataframe(terran_dict)
 
-    async def train_scv(self, techdict):
-        for unit_type in techdict.keys():
-            if unit_type == SCV:
-                unit = unit_type
-                requirement = techdict[unit]
-                if self.can_afford(unit) and not self.already_pending(unit):
-                    for x in requirement:
-                        if self.units(x).exists:
-                            req_building = x
-                    for cc in self.units(req_building).ready.noqueue:
-                        self.combinedActions.append(cc.train(unit_type))
+    async def train_unit(self, unit): 
+        for unit_id in self.techtree.keys():
+            if unit_id == unit:
+                requirement = self.techtree[unit]
+                if self.can_build(unit) is True:
+                    producer = self.check_req(unit)
+                    for producer in self.units(producer).ready.noqueue:
+                        self.combinedActions.append(producer.train(unit))
+
+    def can_build(self, unit):
+        if self.can_afford(unit) and not self.already_pending(unit):
+            producer = self.check_req(unit)
+            if self.units(producer).exists:
+                return True
+    
+    def check_req(self, unit):
+        if isinstance(self.techtree[unit], list):
+            for x in self.techtree[unit]:
+                if self.units(x).exists:
+                    req_unit = x
+                    return req_unit
+                else:
+                    for x in self.techtree[req_unit]:
+                        if not self.units(x).exists:
+                            if self.can_build(prereq_unit) is True:
+                                builder = self.get_builder()
+                                self.build_req(prereq_unit)
+        elif isinstance(self.techtree[unit], UnitTypeId):
+            req_unit = self.techtree[unit]
+            return req_unit
+
+
+    def build_req(self, req):
+        builder = self.get_builder()
+        if self.can_build(req):
+            loc = self.get_build_loc()
+            self.combinedActions.append(builder.build(req, loc))
+
+    def get_build_loc(self):
+        cc = self.townhalls.first
+        loc = cc.position.towards(self.game_info.map_center, 6)
+        return loc
+
+    def get_builder(self):
+        ws = self.workers.gathering
+        if ws:
+            w = ws.furthest_to(ws.center)
+            return w
+
+    async def manage_supply(self, supply_building):
+        if self.supply_left < 3:
+            if self.can_build(supply_building) is True:
+                builder = self.get_builder()
+                self.build_req(supply_building)
+
+
+
+
+
+
 
 
     async def distribute_workers(self, performanceHeavy=True, onlySaturateGas=False):
