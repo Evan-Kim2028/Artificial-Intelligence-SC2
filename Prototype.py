@@ -19,128 +19,164 @@ from typing import List, Dict, Set, Tuple, Any, Optional, Union
 class PrototypeAI(sc2.BotAI):
     def __init__(self):
         self.combinedActions = []
-        #dict = {key:value} {unit type: pre-req}
-        self.techtree = {
-            SCV:[COMMANDCENTER,ORBITALCOMMAND],
-            SUPPLYDEPOT:SCV,
-            REFINERY:SCV,
-            BARRACKS:SUPPLYDEPOT,
-            BARRACKSTECHLAB:BARRACKS,
-            BARRACKSREACTOR:BARRACKS,
-            MARINE:BARRACKS,
-            REAPER:BARRACKS,
-            MARAUDER:BARRACKSTECHLAB,
-            GHOST:BARRACKSTECHLAB,
-            ORBITALCOMMAND:[COMMANDCENTER,BARRACKS],
-            FACTORY:BARRACKS,
-            FACTORYTECHLAB:FACTORY,
-            FACTORYREACTOR:FACTORY,
-            HELLION:FACTORY,
-            HELLIONTANK:FACTORY,
-            WIDOWMINE:FACTORY,
-            THOR:FACTORYTECHLAB,
-            SIEGETANK:FACTORYTECHLAB,
-            STARPORT:FACTORY,
-            STARPORTTECHLAB:STARPORT,
-            STARPORTREACTOR:STARPORT,
-            MEDIVAC:STARPORT,
-            VIKINGFIGHTER:STARPORT,
-            RAVEN:STARPORTTECHLAB,
-            BANSHEE:STARPORTTECHLAB,
-            BATTLECRUISER:STARPORTTECHLAB,
-            ENGINEERINGBAY:SUPPLYDEPOT,
-            ARMORY:FACTORY,
-                        }
-        self.unit_stats = {
-            SCV:0,
-            SUPPLYDEPOT:0,
-            REFINERY:0,
-            BARRACKS:0,
-            BARRACKSTECHLAB:0,
-            BARRACKSREACTOR:0,
-            MARINE:0,
-            REAPER:0,
-            MARAUDER:0,
-            GHOST:0,
-            ORBITALCOMMAND:0,
-            FACTORY:0,
-            FACTORYTECHLAB:0,
-            FACTORYREACTOR:0,
-            HELLION:0,
-            HELLIONTANK:0,
-            WIDOWMINE:0,
-            THOR:0,
-            SIEGETANK:0,
-            STARPORT:0,
-            STARPORTTECHLAB:0,
-            STARPORTREACTOR:0,
-            MEDIVAC:0,
-            VIKINGFIGHTER:0,
-            RAVEN:0,
-            BANSHEE:0,
-            BATTLECRUISER:0,
-            ENGINEERINGBAY:0,
-            ARMORY:0,
-                        }
+        self.building_map = np.zeros((1,1))  #initializes empty numpy array for caching with influence map & A* algo
 
+        #dict = {key:value} {unit type: pre-req}
+        #unit_id: unit tech requirement, current unit count, historic unit count, units in production
+        self.unit_info = {
+            COMMANDCENTER:[SCV, 0, 0, 0],
+            SCV:[[COMMANDCENTER,ORBITALCOMMAND],0,0,0],
+            SUPPLYDEPOT:[SCV,0,0,0],
+            REFINERY:[SCV,0,0,0],
+            BARRACKS:[SUPPLYDEPOT,0,0,0],
+            BARRACKSTECHLAB:[BARRACKS,0,0,0],
+            BARRACKSREACTOR:[BARRACKS,0,0,0],
+            MARINE:[BARRACKS,0,0,0],
+            REAPER:[BARRACKS,0,0,0],
+            MARAUDER:[BARRACKSTECHLAB,0,0,0],
+            GHOST:[BARRACKSTECHLAB,0,0,0],
+            ORBITALCOMMAND:[BARRACKS,0,0,0],
+            FACTORY:[BARRACKS,0,0,0],
+            FACTORYTECHLAB:[FACTORY,0,0,0],
+            FACTORYREACTOR:[FACTORY,0,0,0],
+            HELLION:[FACTORY,0,0,0],
+            HELLIONTANK:[FACTORY,0,0,0],
+            WIDOWMINE:[FACTORY,0,0,0],
+            THOR:[FACTORYTECHLAB,0,0,0],
+            SIEGETANK:[FACTORYTECHLAB,0,0,0],
+            STARPORT:[FACTORY,0,0,0],
+            STARPORTTECHLAB:[STARPORT,0,0,0],
+            STARPORTREACTOR:[STARPORT,0,0,0],
+            MEDIVAC:[STARPORT,0,0,0],
+            VIKINGFIGHTER:[STARPORT,0,0,0],
+            RAVEN:[STARPORTTECHLAB,0,0,0],
+            BANSHEE:[STARPORTTECHLAB,0,0,0],
+            BATTLECRUISER:[STARPORTTECHLAB,0,0,0],
+            ENGINEERINGBAY:[SUPPLYDEPOT,0,0,0],
+            ARMORY:[FACTORY,0,0,0],
+                    }
+    
     async def on_step(self, iteration):
-        await self.do_actions(self.combinedActions)
+        self.playable_area = self.game_info.playable_area[2:4]   #tuple[2:4] to index the last two values (x,y) of the Rect object
         self.combinedActions = []
+        await self.do_actions(self.combinedActions)
         await self.distribute_workers()
-        await self.manage_supply(SUPPLYDEPOT)   #supply depot builds
+        await self.manage_supply(SUPPLYDEPOT)
         await self.train_unit(SCV)
         await self.construct(BARRACKS)
+        await self.manage_gas(REFINERY)
     
+ 
 
-    def unit_counter(self, unit):
-        if unit in self.unit_stats.keys():
-            self.unit_stats[unit] = len(self.units(unit))
-            print("# of ", unit, " = ", self.unit_stats[unit])
+    def return_building_queue(self, structure: UnitTypeId):
+        """Checks if building queue is empty"""
+        for building in self.units(structure):
+            orders = building.orders
+            if orders == []:
+                self.unit_info[structure][2] = 0
+                #print("building queue for ", structure, " = ", self.unit_info[structure][2])
+            else:
+                self.unit_info[structure][2] = len(self.units(structure).ready)
+                #print("building queue for ", structure, " = ", self.unit_info[structure][2])
 
-    async def train_unit(self, unit): 
-        if unit in self.techtree.keys():
-            if self.can_build(unit) is True:
-                producer = self.check_req(unit)#HERE
-                for producer in self.units(producer).ready.noqueue:
-                    self.combinedActions.append(producer.train(unit))
-                    self.unit_counter(unit)
 
-    async def construct(self, structure):
+    def unit_counter(self, unit: UnitTypeId):
+        """Takes length of current amount of units/structures in play and stores as a dictionary value."""
+        if unit in self.unit_info.keys():
+            #self.unit_info[unit] = len(self.units(unit))
+            self.unit_info[unit][1] = self.units(unit).amount
+            #print("# of ", unit, " = ", self.unit_info[unit]) #Debugging
+
+
+    async def train_unit(self, unit: UnitTypeId): 
+        """Trains unit from producer building after checking that producer exists and there are available resources."""
+        if self.can_build(unit) is True:
+            producer = self.check_req(unit)
+            self.return_building_queue(producer)
+            for building in self.units(producer).ready.noqueue:
+                self.combinedActions.append(building.train(unit))
+                self.unit_counter(unit)
+
+
+    async def construct(self, structure: UnitTypeId):
+        """Assigns a builder and arbitrary building location and then constructs building."""
         if self.can_build(structure) is True:
             builder = self.get_builder()
             loc = self.get_build_loc()
             self.combinedActions.append(builder.build(structure, loc))
             self.unit_counter(structure)
         
-    def can_build(self, unit):
+    def can_build(self, unit: UnitTypeId):
+        """Check for resource requirement and that one unit isn't queued up already."""
         if self.can_afford(unit) and not self.already_pending(unit):
             return True
     
-    def check_req(self, unit):
-        if isinstance(self.techtree[unit], list):
-            for x in self.techtree[unit]:
+    def check_req(self, unit: UnitTypeId):
+        """Check that unit pre-requisite building structure exists."""
+        if isinstance(self.unit_info[unit], list):
+            for x in self.unit_info[unit][0]:
                 if self.units(x).exists:
                     req_unit = x
                     return req_unit
-        elif isinstance(self.techtree[unit], UnitTypeId):
-            req_unit = self.techtree[unit]
+        elif isinstance(self.unit_info[unit], UnitTypeId):
+            req_unit = self.unit_info[unit][0]
             return req_unit
 
     def get_build_loc(self):
+        """Retrieves arbitrary buildling location for buildings."""
+        #TODO 11/25/2018 - Specialized building location (gas, supply depot, structures, base design
         cc = self.townhalls.first
         rand = random.randint(0,19)
         loc = cc.position.towards(self.game_info.map_center, rand)
         return loc
 
     def get_builder(self):
+        """Retrieves a builder from pool of active workers gathering minerals to construct a building."""
+        #TODO 11/25/2018 - Optimize by utilizing idle workers and workers closest to building location.
         ws = self.workers.gathering
         if ws:
             w = ws.furthest_to(ws.center)
             return w
 
-    async def manage_supply(self, supply_building):
+    async def manage_supply(self, supply_building: UnitTypeId):
         if self.supply_left < 3:
             await self.construct(supply_building)
+
+    async def manage_gas(self, gas_structure: UnitTypeId):
+        for cc in self.units(COMMANDCENTER):
+            if self.already_pending(BARRACKS) and self.unit_stats[gas_structure] < 1:
+                gas = self.state.vespene_geyser.closer_than(15.0, cc)
+                for gas in gas:
+                    if self.can_build(gas_structure):
+                        builder = self.get_builder()
+                        self.combinedActions.append(builder.build(gas_structure, gas))
+                        self.unit_counter(gas_structure)
+
+    def building_loc_setup(self, building_map) -> bool: 
+        self.building_map = np.zeros(building_map)  #Move this to 'early game setup' function
+        
+        def in_pathing_grid(self, x, y):
+            pos = (x,y)
+            return self._game_info.placement_grid[pos] == 0
+
+        for x in range(self.building_map.shape[0]):
+            for y in range(self.building_map.shape[1]):
+                if self.in_building_grid(x, y) == 0:
+                    
+                    self.building_map[x][y] = 1    #1 = buildable position
+
+                    #Implement check to check around initial value point
+        
+
+
+
+
+
+
+
+
+
+
 
 
 
