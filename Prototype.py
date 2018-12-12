@@ -15,12 +15,15 @@ from sc2.data import Race, ActionResult, Attribute, race_worker, race_townhalls,
 from sc2.game_info import GameInfo
 from typing import List, Dict, Set, Tuple, Any, Optional, Union
 
+from Econometrics import WorkForce, HistoricalData
+from MicroController import Micro
+from Buildit import Buildit
+from BuildGridManager import BuildGrid
 
 class PrototypeAI(sc2.BotAI):
     def __init__(self):
         self.combinedActions = []
-        self.building_map = np.zeros((1,1))  #initializes empty numpy array for caching with influence map & A* algo
-
+          #initializes empty numpy array for caching with influence map & A* algo
         #dict = {key:value} {unit type: pre-req}
         #unit_id: unit tech requirement, current unit count, historic unit count, units in production
         self.unit_info = {
@@ -55,92 +58,74 @@ class PrototypeAI(sc2.BotAI):
             ENGINEERINGBAY:[SUPPLYDEPOT,0,0,0],
             ARMORY:[FACTORY,0,0,0],
                     }
+        self.expansion_pos_list = []
     
     async def on_step(self, iteration):
-        self.playable_area = self.game_info.playable_area[2:4]   #tuple[2:4] to index the last two values (x,y) of the Rect object
+        self.start_flag = False
+        self.setup_game()
         self.combinedActions = []
-        await self.do_actions(self.combinedActions)
         await self.distribute_workers()
-        await self.manage_supply(SUPPLYDEPOT)
-        await self.train_unit(SCV)
-        await self.construct(BARRACKS)
-        await self.manage_gas(REFINERY)
-    
- 
+        await self.can_build(UnitTypeId.SCV)
+        #await self.manage_supply(SUPPLYDEPOT)
+        #await self.construct(BARRACKS)
+        #await self.manage_gas(REFINERY)
+        await self.do_actions(self.combinedActions)
 
-    def return_building_queue(self, structure: UnitTypeId):
-        """Checks if building queue is empty"""
-        for building in self.units(structure):
-            orders = building.orders
-            if orders == []:
-                self.unit_info[structure][2] = 0
-                #print("building queue for ", structure, " = ", self.unit_info[structure][2])
-            else:
-                self.unit_info[structure][2] = len(self.units(structure).ready)
-                #print("building queue for ", structure, " = ", self.unit_info[structure][2])
+    def setup_game(self):
+        while self.start_flag is False:
+            self.playable_area = self.game_info.playable_area[2:4]   #tuple[2:4] to index the last two values (x,y) of the Rect object
+            BuildGrid().populate_map_grid(self.playable_area)
+            for pos in self.expansion_locations().keys():
+                self.expansion_pos_list.append(pos)
+            self.start_flag = True
 
 
-    def unit_counter(self, unit: UnitTypeId):
-        """Takes length of current amount of units/structures in play and stores as a dictionary value."""
-        if unit in self.unit_info.keys():
-            #self.unit_info[unit] = len(self.units(unit))
-            self.unit_info[unit][1] = self.units(unit).amount
-            #print("# of ", unit, " = ", self.unit_info[unit]) #Debugging
+    async def can_build(self, unit: UnitTypeId):
+        """Check for resource requirement and that one unit isn't queued up already."""
+        if self.can_afford(unit) and not self.already_pending(unit):
+            units_list = Buildit().get_producers(unit)
+            self.train_unit(units_list, unit)
 
-
-    async def train_unit(self, unit: UnitTypeId): 
-        """Trains unit from producer building after checking that producer exists and there are available resources."""
-        if self.can_build(unit) is True:
-            producer = self.check_req(unit)
-            self.return_building_queue(producer)
-            for building in self.units(producer).ready.noqueue:
-                self.combinedActions.append(building.train(unit))
-                self.unit_counter(unit)
-
+    def train_unit(self, producer_list: List, unit: UnitTypeId):           
+        for producer in producer_list:
+            for producer_unit in self.units(producer).ready.noqueue:
+                num_units = len(self.units(unit))
+                WorkForce().unit_count(unit, num_units)
+                HistoricalData().unit_count(unit, num_units)
+                self.combinedActions.append(producer_unit.train(unit))
+              
+    async def manage_supply(self, supply_building: UnitTypeId):
+        if self.supply_left < 3:
+            await self.construct(supply_building)
 
     async def construct(self, structure: UnitTypeId):
         """Assigns a builder and arbitrary building location and then constructs building."""
         if self.can_build(structure) is True:
             builder = self.get_builder()
-            loc = self.get_build_loc()
-            self.combinedActions.append(builder.build(structure, loc))
-            self.unit_counter(structure)
+            self.building_loc_setup()
+            print("construction starting")
+
+        def get_builder(self):
+            """Retrieves a builder from pool of active workers gathering minerals to construct a building."""
+            #TODO 11/25/2018 - Optimize by utilizing idle workers and workers closest to building location.
+            ws = self.workers.gathering
+            if ws:
+                w = ws.furthest_to(ws.center)
+                return w
+
+
+
+
+
         
-    def can_build(self, unit: UnitTypeId):
-        """Check for resource requirement and that one unit isn't queued up already."""
-        if self.can_afford(unit) and not self.already_pending(unit):
-            return True
-    
-    def check_req(self, unit: UnitTypeId):
-        """Check that unit pre-requisite building structure exists."""
-        if isinstance(self.unit_info[unit], list):
-            for x in self.unit_info[unit][0]:
-                if self.units(x).exists:
-                    req_unit = x
-                    return req_unit
-        elif isinstance(self.unit_info[unit], UnitTypeId):
-            req_unit = self.unit_info[unit][0]
-            return req_unit
 
-    def get_build_loc(self):
-        """Retrieves arbitrary buildling location for buildings."""
-        #TODO 11/25/2018 - Specialized building location (gas, supply depot, structures, base design
-        cc = self.townhalls.first
-        rand = random.randint(0,19)
-        loc = cc.position.towards(self.game_info.map_center, rand)
-        return loc
 
-    def get_builder(self):
-        """Retrieves a builder from pool of active workers gathering minerals to construct a building."""
-        #TODO 11/25/2018 - Optimize by utilizing idle workers and workers closest to building location.
-        ws = self.workers.gathering
-        if ws:
-            w = ws.furthest_to(ws.center)
-            return w
+    def building_loc_setup(self) -> tuple: 
+        BuildGrid(self.building_grid, self.playable_area)
 
-    async def manage_supply(self, supply_building: UnitTypeId):
-        if self.supply_left < 3:
-            await self.construct(supply_building)
+        
+
+
 
     async def manage_gas(self, gas_structure: UnitTypeId):
         for cc in self.units(COMMANDCENTER):
@@ -150,25 +135,6 @@ class PrototypeAI(sc2.BotAI):
                     if self.can_build(gas_structure):
                         builder = self.get_builder()
                         self.combinedActions.append(builder.build(gas_structure, gas))
-                        self.unit_counter(gas_structure)
-
-    def building_loc_setup(self, building_map) -> bool: 
-        self.building_map = np.zeros(building_map)  #Move this to 'early game setup' function
-        
-        def in_pathing_grid(self, x, y):
-            pos = (x,y)
-            return self._game_info.placement_grid[pos] == 0
-
-        for x in range(self.building_map.shape[0]):
-            for y in range(self.building_map.shape[1]):
-                if self.in_building_grid(x, y) == 0:
-                    
-                    self.building_map[x][y] = 1    #1 = buildable position
-
-                    #Implement check to check around initial value point
-        
-
-
 
 
 

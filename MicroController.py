@@ -56,7 +56,6 @@ class Micro(object):
 
         for x in range(radius*3):
             for y in range(radius*3):
-
                 #enemy_x_pos = enemy[0]
                 #enemy_y_pos = enemy[1]
                 #enemy_unit_pos = np.array([enemy_x_pos, enemy_y_pos])
@@ -75,5 +74,17 @@ class Micro(object):
                 #print(map)
                 #map[x + aa - radius][y + bb - radius] += enemy_interpolated_value
 
+    def rolling_window(main_array, sub_array_shape, stepsize_x=1, stepsize_y=1): 
+        strided = np.lib.stride_tricks.as_strided
+        x_sub_dim, y_sub_dim = sub_array_shape  #Define custom sub_array_shape for rolling window.  
+        x_main_dim,y_main_dim = main_array.shape[-2:]    # List slice ensures that multi-dimension is not affected
+        #print(x_main_dim, "x_main_dim", y_main_dim, "y_main_dim")
+        #print(x_sub_dim, "x_sub_dim", y_sub_dim, "y_sub_dim")
+        x_main_stride,y_main_stride = main_array.strides[-2:]
 
+        out_shp = main_array.shape[:-2] + (x_main_dim - x_sub_dim + 1, y_main_dim - y_sub_dim + 1, x_sub_dim, y_sub_dim)
+        out_stride = main_array.strides[:-2] + (x_main_stride, y_main_stride, x_main_stride, y_main_stride)
+
+        imgs = strided(main_array, shape=out_shp, strides=out_stride)
+        return imgs[...,::stepsize_x,::stepsize_y,:,:]
 
