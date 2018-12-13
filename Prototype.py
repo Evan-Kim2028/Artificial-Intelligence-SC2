@@ -1,9 +1,11 @@
+import asyncio
 import pandas as pd
 import numpy as np
 import random
 
 import sc2
 from sc2 import Race, Difficulty
+from sc2.client import Client
 from sc2.constants import *
 from sc2.position import Point2, Point3
 from sc2.unit import Unit
@@ -23,76 +25,58 @@ from BuildGridManager import BuildGrid
 class PrototypeAI(sc2.BotAI):
     def __init__(self):
         self.combinedActions = []
-          #initializes empty numpy array for caching with influence map & A* algo
-        #dict = {key:value} {unit type: pre-req}
-        #unit_id: unit tech requirement, current unit count, historic unit count, units in production
-        self.unit_info = {
-            COMMANDCENTER:[SCV, 0, 0, 0],
-            SCV:[[COMMANDCENTER,ORBITALCOMMAND],0,0,0],
-            SUPPLYDEPOT:[SCV,0,0,0],
-            REFINERY:[SCV,0,0,0],
-            BARRACKS:[SUPPLYDEPOT,0,0,0],
-            BARRACKSTECHLAB:[BARRACKS,0,0,0],
-            BARRACKSREACTOR:[BARRACKS,0,0,0],
-            MARINE:[BARRACKS,0,0,0],
-            REAPER:[BARRACKS,0,0,0],
-            MARAUDER:[BARRACKSTECHLAB,0,0,0],
-            GHOST:[BARRACKSTECHLAB,0,0,0],
-            ORBITALCOMMAND:[BARRACKS,0,0,0],
-            FACTORY:[BARRACKS,0,0,0],
-            FACTORYTECHLAB:[FACTORY,0,0,0],
-            FACTORYREACTOR:[FACTORY,0,0,0],
-            HELLION:[FACTORY,0,0,0],
-            HELLIONTANK:[FACTORY,0,0,0],
-            WIDOWMINE:[FACTORY,0,0,0],
-            THOR:[FACTORYTECHLAB,0,0,0],
-            SIEGETANK:[FACTORYTECHLAB,0,0,0],
-            STARPORT:[FACTORY,0,0,0],
-            STARPORTTECHLAB:[STARPORT,0,0,0],
-            STARPORTREACTOR:[STARPORT,0,0,0],
-            MEDIVAC:[STARPORT,0,0,0],
-            VIKINGFIGHTER:[STARPORT,0,0,0],
-            RAVEN:[STARPORTTECHLAB,0,0,0],
-            BANSHEE:[STARPORTTECHLAB,0,0,0],
-            BATTLECRUISER:[STARPORTTECHLAB,0,0,0],
-            ENGINEERINGBAY:[SUPPLYDEPOT,0,0,0],
-            ARMORY:[FACTORY,0,0,0],
-                    }
         self.expansion_pos_list = []
-    
-    async def on_step(self, iteration):
+        self.building_grid = np.zeros((1,1))
         self.start_flag = False
-        self.setup_game()
+        
+
+
+    async def on_step(self, iteration):
         self.combinedActions = []
         await self.distribute_workers()
-        await self.can_build(UnitTypeId.SCV)
-        #await self.manage_supply(SUPPLYDEPOT)
-        #await self.construct(BARRACKS)
-        #await self.manage_gas(REFINERY)
+        await self.train_unit(UnitTypeId.SCV)
+        await self.manage_supply(UnitTypeId.SUPPLYDEPOT)
         await self.do_actions(self.combinedActions)
+        self.setup_game()
+
 
     def setup_game(self):
         while self.start_flag is False:
-            self.playable_area = self.game_info.playable_area[2:4]   #tuple[2:4] to index the last two values (x,y) of the Rect object
-            BuildGrid().populate_map_grid(self.playable_area)
-            for pos in self.expansion_locations().keys():
+            playable_area = self.game_info.playable_area[2:4]   #tuple[2:4] to index the last two values (x,y) of the Rect object
+            self.populate_map_grid(playable_area)
+            for pos in self.expansion_locations.keys():
                 self.expansion_pos_list.append(pos)
             self.start_flag = True
 
+    def populate_map_grid(self, playable_map_area):
+        self.building_grid = np.zeros(playable_map_area)
+        for x in range(self.building_grid.shape[0]):
+            for y in range(self.building_grid.shape[1]):
+                grid_loc = (x,y)
+                if self.in_placement_grid(grid_loc) is True:
+                    self.building_grid[x][y] = 1
 
-    async def can_build(self, unit: UnitTypeId):
+    def in_placement_grid(self, pos) -> bool:
+        """Returns True if position is buildable"""
+        return self._game_info.placement_grid[pos] != 0
+
+
+    def can_build(self, unit: UnitTypeId):
         """Check for resource requirement and that one unit isn't queued up already."""
         if self.can_afford(unit) and not self.already_pending(unit):
-            units_list = Buildit().get_producers(unit)
-            self.train_unit(units_list, unit)
+            return True
 
-    def train_unit(self, producer_list: List, unit: UnitTypeId):           
-        for producer in producer_list:
-            for producer_unit in self.units(producer).ready.noqueue:
-                num_units = len(self.units(unit))
-                WorkForce().unit_count(unit, num_units)
-                HistoricalData().unit_count(unit, num_units)
-                self.combinedActions.append(producer_unit.train(unit))
+
+    async def train_unit(self, unit: UnitTypeId):   
+        if self.can_build(unit) is True:
+            producer_list = Buildit().get_producers(unit)        
+            for producer in producer_list:
+                for producer_unit in self.units(producer).ready.noqueue:
+                    num_units = len(self.units(unit))
+                    WorkForce().unit_count(unit, num_units)
+                    #HistoricalData().historic_unit_count(unit) #This does not work properly. 
+                    self.combinedActions.append(producer_unit.train(unit))
+
               
     async def manage_supply(self, supply_building: UnitTypeId):
         if self.supply_left < 3:
@@ -101,30 +85,28 @@ class PrototypeAI(sc2.BotAI):
     async def construct(self, structure: UnitTypeId):
         """Assigns a builder and arbitrary building location and then constructs building."""
         if self.can_build(structure) is True:
+            print("ready to build")
             builder = self.get_builder()
-            self.building_loc_setup()
-            print("construction starting")
-
-        def get_builder(self):
-            """Retrieves a builder from pool of active workers gathering minerals to construct a building."""
-            #TODO 11/25/2018 - Optimize by utilizing idle workers and workers closest to building location.
+            expansion_list = self.expansion_pos_list #list of positions
+            print("expansion list", expansion_list)
+            unit_query = self.units(UnitTypeId.COMMANDCENTER).first.position
+            nested_query_pathing_list = []
             ws = self.workers.gathering
-            if ws:
-                w = ws.furthest_to(ws.center)
-                return w
+            for x in expansion_list:
+                nested_query_pathing_list.append([unit_query, x])
+            print("nested list", nested_query_pathing_list)
+            queried = await self._client.query_pathings(nested_query_pathing_list)
+            print("query", queried)
 
+    def get_builder(self):
+        """Retrieves a builder from pool of active workers gathering minerals to construct a building."""
+        #TODO 11/25/2018 - Optimize by utilizing idle workers and workers closest to building location.
+        ws = self.workers.gathering
+        if ws:
+            w = ws.furthest_to(ws.center)
+            return w
 
-
-
-
-        
-
-
-    def building_loc_setup(self) -> tuple: 
-        BuildGrid(self.building_grid, self.playable_area)
-
-        
-
+    
 
 
     async def manage_gas(self, gas_structure: UnitTypeId):

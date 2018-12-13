@@ -1,7 +1,7 @@
 import numpy as np
 from typing import List
 """
-The Micro class will hold all functions related to micro.
+MicroController utilizes different types of pathfinding algorithms.
 """
 class Micro(object):
     def harass_micro(self, friendly_unit_pos, enemy_worker_pos, closest_enemy_unit_pos): #Function currently isn't being used.

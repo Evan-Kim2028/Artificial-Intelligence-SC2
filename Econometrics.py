@@ -1,5 +1,8 @@
 from sc2.ids.unit_typeid import UnitTypeId
 
+"""
+Econometrics is built to track in_game statistics throughout the game. 
+"""
 class WorkForce(object):
     def __init__(self):
         self.building_amount = {
@@ -83,9 +86,6 @@ class HistoricalData(object):
             UnitTypeId.WIDOWMINE: 0,
         }
 
-    def unit_count(self, unit: UnitTypeId, amount: int):
-        if isinstance(amount, int):
-            self.unit_amount[unit] += 1
-            print("Historical Data amount for", unit, " = " , self.unit_amount[unit])
-        else:
-            pass
+    def historic_unit_count(self, unit: UnitTypeId):    #Not working, updates once and then stops. 
+        self.unit_amount[unit] += 1
+        print("Historical Data amount for", unit, " = " , self.unit_amount[unit])

@@ -1,7 +1,9 @@
 from sc2.ids.unit_typeid import UnitTypeId
 from sc2.unit import Unit
 
-
+"""
+Buildit checks unit tech requirements.
+"""
 class Buildit(object):
     def __init__(self):
         self.build_tree = {
